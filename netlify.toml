@@ -1,0 +1,5 @@
+# DS_e-Drive — site statique (aucune étape de build, aucun crédit Functions consommé)
+[build]
+  publish = "."
+
+# Les en-têtes de sécurité sont définis dans le fichier _headers.

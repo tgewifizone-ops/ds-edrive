@@ -1,0 +1,79 @@
+rules_version = '2';
+// =============================================================
+// DS_e-Drive — Règles de sécurité Firestore
+// À copier dans Firebase > Firestore Database > Règles > Publier.
+// =============================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- Administrateurs ----
+    // Compte principal toujours autorisé (e-mail vérifié obligatoire).
+    function signedIn() { return request.auth != null; }
+    function userEmail() { return request.auth.token.email.lower(); }
+    function isAdmin() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && (userEmail() in ['tgewifizone@gmail.com']
+            || (exists(/databases/$(database)/documents/config/admins)
+                && userEmail() in get(/databases/$(database)/documents/config/admins).data.emails));
+    }
+    function isStr(v, min, max) { return v is string && v.size() >= min && v.size() <= max; }
+
+    // ---- Chauffeurs : lecture publique, écriture admin ----
+    match /drivers/{id} {
+      allow read: if true;
+      allow create, update: if isAdmin()
+        && isStr(request.resource.data.nom, 2, 80)
+        && isStr(request.resource.data.telephone, 4, 30)
+        && request.resource.data.vehicule in ['moto', 'tricycle', 'voiture'];
+      allow delete: if isAdmin();
+    }
+
+    // ---- Candidatures : dépôt public contrôlé, lecture admin ----
+    match /applications/{id} {
+      allow create: if request.resource.data.keys().hasOnly(
+            ['nom','tel','email','vehicule','modele','immat','quartier','zone','creneaux','prestations','status','createdAt'])
+        && isStr(request.resource.data.nom, 2, 80)
+        && isStr(request.resource.data.tel, 7, 30)
+        && isStr(request.resource.data.email, 0, 120)
+        && isStr(request.resource.data.vehicule, 1, 20)
+        && isStr(request.resource.data.modele, 0, 60)
+        && isStr(request.resource.data.immat, 0, 30)
+        && isStr(request.resource.data.quartier, 1, 80)
+        && isStr(request.resource.data.zone, 0, 60)
+        && isStr(request.resource.data.creneaux, 0, 200)
+        && isStr(request.resource.data.prestations, 0, 200)
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdAt == request.time
+        && (!exists(/databases/$(database)/documents/settings/public)
+            || get(/databases/$(database)/documents/settings/public).data.get('mode', 'normal') != 'maintenance');
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ---- Lieux de la carte : lecture publique, écriture admin ----
+    match /places/{id} {
+      allow read: if true;
+      allow write: if isAdmin()
+        && isStr(request.resource.data.nom, 2, 80)
+        && request.resource.data.type in ['urbain', 'hors']
+        && request.resource.data.lat is number && request.resource.data.lng is number;
+      allow delete: if isAdmin();
+    }
+
+    // ---- Paramètres publics (WhatsApp, bandeau, mode) ----
+    match /settings/public {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ---- Liste des administrateurs : admin uniquement ----
+    match /config/admins {
+      allow read, write: if isAdmin();
+    }
+
+    // Tout le reste est interdit.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
