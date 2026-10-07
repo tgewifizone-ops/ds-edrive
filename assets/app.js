@@ -16,6 +16,30 @@ function showMsg(el, text, kind = 'ok') {
   el.textContent = text;
 }
 function hideMsg(el) { el.className = 'admin-msg'; el.textContent = ''; }
+
+// Confirmation sans boîte de dialogue (certains navigateurs intégrés bloquent confirm/alert) :
+// 1er clic = « Confirmer ? », 2e clic dans les 5 s = action.
+function confirmClick(btn) {
+  if (btn.dataset.armed === '1') { btn.dataset.armed = ''; return true; }
+  const old = btn.textContent;
+  btn.dataset.armed = '1'; btn.textContent = 'Confirmer ?';
+  setTimeout(() => { if (btn.dataset.armed === '1') { btn.dataset.armed = ''; btn.textContent = old; } }, 5000);
+  return false;
+}
+function notify(msg, kind = 'ok') {
+  let box = document.getElementById('dsToast');
+  if (!box) {
+    box = document.createElement('div'); box.id = 'dsToast';
+    box.setAttribute('role', 'status');
+    box.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:100000;max-width:90vw;padding:12px 18px;border-radius:10px;font:600 14px/1.4 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.25);display:none';
+    document.body.appendChild(box);
+  }
+  box.textContent = msg;
+  box.style.background = kind === 'err' ? '#FDECEC' : '#ECFDF5';
+  box.style.color = kind === 'err' ? '#8A1F14' : '#065F46';
+  box.style.display = 'block';
+  clearTimeout(box._t); box._t = setTimeout(() => { box.style.display = 'none'; }, 5000);
+}
 function haversineKm(a, b) {
   const R = 6371, toR = x => x * Math.PI / 180;
   const dLat = toR(b.lat - a.lat), dLng = toR(b.lng - a.lng);
@@ -291,7 +315,7 @@ document.querySelectorAll('.vtab').forEach(btn => btn.addEventListener('click', 
   btn.classList.add('active');
 }));
 $('btnGeo').addEventListener('click', () => {
-  if (!navigator.geolocation) { alert('La géolocalisation n’est pas disponible sur cet appareil.'); return; }
+  if (!navigator.geolocation) { notify('La géolocalisation n’est pas disponible sur cet appareil.', 'err'); return; }
   $('btnGeo').textContent = '⏳';
   navigator.geolocation.getCurrentPosition(pos => {
     $('btnGeo').textContent = '📍';
@@ -304,7 +328,7 @@ $('btnGeo').addEventListener('click', () => {
     else { updateEndpoints(); renderDrivers(); }
   }, () => {
     $('btnGeo').textContent = '📍';
-    alert('Position introuvable. Autorisez la localisation dans votre navigateur ou choisissez un quartier.');
+    notify('Position introuvable. Autorisez la localisation dans votre navigateur ou choisissez un quartier.', 'err');
   }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
 });
 
@@ -401,7 +425,7 @@ $('signupForm').addEventListener('submit', async e => {
     creneaux: fd.getAll('creneaux').join(', ').slice(0, 200), prestations: fd.getAll('prestations').join(', ').slice(0, 200)
   };
   if (a.nom.length < 2 || digits(a.tel).length < 7 || !a.quartier) {
-    alert('Merci d\u2019indiquer votre nom, un numéro de téléphone valide et votre quartier.');
+    notify('Merci d\u2019indiquer votre nom, un numéro de téléphone valide et votre quartier.', 'err');
     return;
   }
   const btn = $('btnSubmitForm');
@@ -489,7 +513,7 @@ $('btnRecheck').addEventListener('click', async () => {
 let unsubApps = null, idleTimer = null;
 function resetIdle() {
   clearTimeout(idleTimer);
-  if (state.user) idleTimer = setTimeout(() => { B.logout(); alert('Session administrateur fermée après 30 minutes d’inactivité.'); }, 30 * 60 * 1000);
+  if (state.user) idleTimer = setTimeout(() => { B.logout(); notify('Session administrateur fermée après 30 minutes d’inactivité.', 'err'); }, 30 * 60 * 1000);
 }
 ['click', 'keydown', 'mousemove', 'touchstart'].forEach(ev => document.addEventListener(ev, () => state.user && resetIdle(), { passive: true }));
 
@@ -497,22 +521,20 @@ async function evaluateUser(user) {
   state.user = user; state.isAdmin = false;
   if (unsubApps) { unsubApps(); unsubApps = null; }
   if (user) {
-    if (!user.emailVerified) {
+    const res = await B.checkAdmin();
+    if (res.ok) {
+      state.isAdmin = true; state.adminEmails = res.emails;
+      $('adminsList').value = res.emails.join('\n');
+      unsubApps = B.watchApplications(list => { state.apps = list; renderAdminApps(); },
+        err => console.warn('applications', err));
+    } else if (!user.emailVerified) {
       $('adminPendingTitle').textContent = 'Vérifiez votre adresse e-mail';
-      $('adminPendingText').textContent = `Par sécurité, l'accès admin exige un e-mail vérifié. Envoyez le lien de vérification à ${user.email}, cliquez dessus, puis réessayez.`;
+      $('adminPendingText').textContent = `Les administrateurs ajoutés doivent avoir un e-mail vérifié. Envoyez le lien de vérification à ${user.email} (pensez au dossier Spam), cliquez dessus, puis réessayez.`;
       $('btnSendVerify').style.display = '';
     } else {
-      const res = await B.checkAdmin();
-      if (res.ok) {
-        state.isAdmin = true; state.adminEmails = res.emails;
-        $('adminsList').value = res.emails.join('\n');
-        unsubApps = B.watchApplications(list => { state.apps = list; renderAdminApps(); },
-          err => console.warn('applications', err));
-      } else {
-        $('adminPendingTitle').textContent = 'Accès refusé';
-        $('adminPendingText').textContent = `Le compte ${user.email} n'est pas autorisé comme administrateur.`;
-        $('btnSendVerify').style.display = 'none';
-      }
+      $('adminPendingTitle').textContent = 'Accès refusé';
+      $('adminPendingText').textContent = `Le compte ${user.email} n'est pas autorisé comme administrateur.`;
+      $('btnSendVerify').style.display = 'none';
     }
     resetIdle();
   } else clearTimeout(idleTimer);
@@ -555,7 +577,7 @@ $('adminDriversTableBody').addEventListener('click', async e => {
   const t = e.target;
   try {
     if (t.dataset.drvDel) {
-      if (confirm('Retirer ce chauffeur du site ?')) await B.removeDriver(t.dataset.drvDel);
+      if (confirmClick(t)) { await B.removeDriver(t.dataset.drvDel); notify('Chauffeur retiré du site.'); }
     } else if (t.dataset.drvToggle) {
       const d = state.drivers.find(x => x.id === t.dataset.drvToggle);
       await B.saveDriver(d.id, { disponible: d.disponible === false });
@@ -563,7 +585,7 @@ $('adminDriversTableBody').addEventListener('click', async e => {
       fillDriverForm(state.drivers.find(x => x.id === t.dataset.drvEdit));
       gotoTab('tab-ajouter');
     }
-  } catch (err) { alert('Action refusée : ' + (err.code || err.message)); }
+  } catch (err) { notify('Action refusée : ' + (err.code || err.message), 'err'); }
 });
 function fillDriverForm(d) {
   $('drvId').value = d ? d.id : '';
@@ -629,9 +651,9 @@ $('adminPendingTableBody').addEventListener('click', async e => {
         rating: 5, disponible: true
       });
     } else if (t.dataset.appNo) {
-      if (confirm('Refuser et supprimer cette candidature ?')) await B.removeApplication(t.dataset.appNo);
+      if (confirmClick(t)) { await B.removeApplication(t.dataset.appNo); notify('Candidature refusée et supprimée.'); }
     }
-  } catch (err) { alert('Action refusée : ' + (err.code || err.message)); }
+  } catch (err) { notify('Action refusée : ' + (err.code || err.message), 'err'); }
 });
 
 // CSV (protégé contre l'injection de formules Excel)
@@ -691,8 +713,8 @@ function editPlace(id) {
 $('adminPlacesTableBody').addEventListener('click', async e => {
   const t = e.target;
   if (t.dataset.plEdit) { editPlace(t.dataset.plEdit); $('placesMap').scrollIntoView({ behavior: 'smooth' }); }
-  if (t.dataset.plDel && confirm('Supprimer ce lieu de la carte ?')) {
-    try { await B.removePlace(t.dataset.plDel); } catch (err) { alert('Refusé : ' + (err.code || err.message)); }
+  if (t.dataset.plDel && confirmClick(t)) {
+    try { await B.removePlace(t.dataset.plDel); } catch (err) { notify('Refusé : ' + (err.code || err.message), 'err'); }
   }
 });
 $('plCancel').addEventListener('click', () => {
@@ -726,8 +748,8 @@ $('settingsForm').addEventListener('submit', async e => {
   } catch (err) { showMsg($('setMsg'), 'Refusé : ' + (err.code || err.message), 'err'); }
 });
 $('btnSeedDrivers').addEventListener('click', async () => {
-  if (!confirm('Ajouter les 6 chauffeurs d’exemple au site public ?')) return;
-  try { await B.importDrivers(DEMO_DRIVERS); gotoTab('tab-chauffeurs'); } catch (err) { alert('Refusé : ' + (err.code || err.message)); }
+  if (!confirmClick($('btnSeedDrivers'))) return;
+  try { await B.importDrivers(DEMO_DRIVERS); gotoTab('tab-chauffeurs'); } catch (err) { notify('Refusé : ' + (err.code || err.message), 'err'); }
 });
 
 // ---------- Sécurité ----------
